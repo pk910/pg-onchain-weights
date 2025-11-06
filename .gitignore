@@ -1,0 +1,37 @@
+# Hardhat
+node_modules
+cache
+artifacts
+typechain-types
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+temp/
+pgdata.txt
+
+# Test data (generated)
+test_data/*.txt
+
+# Legacy output files
+output.txt
+output.csv
+import_data.hex
+
+# Test coverage
+coverage
+coverage.json
