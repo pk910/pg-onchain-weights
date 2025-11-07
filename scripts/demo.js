@@ -137,22 +137,6 @@ async function main() {
   const totalPct = Number(totalPercentage) / 10000;
   console.log("   Total percentage:    ", totalPct.toFixed(4) + "%");
 
-  // Top 5 members
-  const sorted = [...results].sort((a, b) => Number(b.percentage - a.percentage));
-  console.log("\n   Top 5 members:");
-  for (let i = 0; i < Math.min(5, sorted.length); i++) {
-    const pct = (Number(sorted[i].percentage) / 10000).toFixed(4);
-    console.log(`   ${i + 1}. ${sorted[i].memberAddress} - ${pct}%`);
-  }
-
-  // Bottom 5 members
-  console.log("\n   Bottom 5 members:");
-  const bottomStart = Math.max(0, sorted.length - 5);
-  for (let i = bottomStart; i < sorted.length; i++) {
-    const pct = (Number(sorted[i].percentage) / 10000).toFixed(4);
-    console.log(`   ${i + 1}. ${sorted[i].memberAddress} - ${pct}%`);
-  }
-
   // Save output
   console.log("\n7. Saving output...");
   const outputPath = path.join(__dirname, "../test_data/output.txt");
@@ -168,32 +152,50 @@ async function main() {
 
   // Fetch breakdown for all members (skip org members)
   const breakdowns = [];
-  for (let i = 0; i < sorted.length; i++) {
+  for (let i = 0; i < results.length; i++) {
     try {
-      const breakdown = await pgWeights.getMemberBreakdown(sorted[i].memberAddress, cutoffYear, cutoffMonth);
+      const breakdown = await pgWeights.getMemberBreakdown(results[i].memberAddress, cutoffYear, cutoffMonth);
       breakdowns.push({
-        address: sorted[i].memberAddress,
+        address: results[i].memberAddress,
         monthsSinceJoin: breakdown[0],
         activeMonths: breakdown[1],
         weightedMonths: breakdown[2],
         sqrtWeight: breakdown[3],
-        percentage: sorted[i].percentage,
+        percentage: results[i].percentage,
         isOrgMember: false
       });
     } catch (e) {
       // This is likely an org member - add with N/A values
       breakdowns.push({
-        address: sorted[i].memberAddress,
+        address: results[i].memberAddress,
         monthsSinceJoin: 0n,
         activeMonths: 0n,
         weightedMonths: 0n,
         sqrtWeight: 0n,
-        percentage: sorted[i].percentage,
+        percentage: results[i].percentage,
         isOrgMember: true
       });
     }
   }
 
+  // Sort by join date (oldest members first)
+  breakdowns.sort((a, b) => {
+    // Org members go first
+    if (a.isOrgMember && !b.isOrgMember) return -1;
+    if (!a.isOrgMember && b.isOrgMember) return 1;
+    // Then sort by monthsSinceJoin descending (oldest first)
+    return Number(b.monthsSinceJoin - a.monthsSinceJoin);
+  });
+
+  // Top 5 members by percentage
+  const sortedByPct = [...breakdowns].sort((a, b) => Number(b.percentage - a.percentage));
+  console.log("\n   Top 5 members by allocation:");
+  for (let i = 0; i < Math.min(5, sortedByPct.length); i++) {
+    const pct = (Number(sortedByPct[i].percentage) / 10000).toFixed(4);
+    console.log(`   ${i + 1}. ${sortedByPct[i].address} - ${pct}%`);
+  }
+
+  console.log("\n   All members (sorted by join date, oldest first):");
   console.log("   " + "─".repeat(130));
   console.log("   " +
     "Address".padEnd(44) +

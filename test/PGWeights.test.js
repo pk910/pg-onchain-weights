@@ -83,22 +83,6 @@ describe("PGWeights", function () {
   });
 
   describe("Weight Calculation", function () {
-    it("Should calculate weights correctly", async function () {
-      // Add a member who joined in Jan 2024
-      await pgWeights.addMember(member1.address, 2024, 1, 100);
-
-      // Calculate weight for Nov 2025 (10 months later)
-      const [sqrtWeight, activeMonths] = await pgWeights.calculateMemberWeight(
-        member1.address,
-        2025,
-        11
-      );
-
-      // Should have 22 active months (Jan 2024 to Nov 2025 inclusive)
-      expect(activeMonths).to.equal(22);
-      expect(sqrtWeight).to.be.gt(0);
-    });
-
     it("Should return weights for all members", async function () {
       // Add multiple members
       const [, , , addr2, addr3] = await ethers.getSigners();

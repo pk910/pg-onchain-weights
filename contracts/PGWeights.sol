@@ -5,15 +5,17 @@ pragma solidity ^0.8.0;
  * @title PGWeights
  * @notice Protocol Guild member weights tracking contract
  * @dev Calculates member weights based on tenure and part-time factor
+ *      Optimized storage layout: array-based with mapping index lookup
  */
 contract PGWeights {
     struct Member {
-        address memberAddress;
-        uint16 joinYear;            // year when member joined (e.g., 2024)
-        uint8 joinMonth;            // month when member joined (1-12)
-        uint8 partTimeFactor;       // 0-100 (100 = 100%, 50 = 50%)
-        uint16 monthsOnBreak;       // total months on leave
-        bool active;
+        address memberAddress;      // 20 bytes
+        uint16 joinYear;            //  2 bytes - year when member joined (e.g., 2024)
+        uint8 joinMonth;            //  1 byte  - month when member joined (1-12)
+        uint8 partTimeFactor;       //  1 bytes - 0-100 (100 = 100%, 50 = 50%)
+        uint16 monthsOnBreak;       //  2 bytes - total months on leave
+        bool active;                //  1 byte  - true if member is active
+                                    //  5 bytes - reserve for future use
     }
 
     struct WeightResult {
@@ -23,17 +25,18 @@ contract PGWeights {
 
     struct OrgMember {
         address memberAddress;
-        uint96 fixedPercentage;     // scaled by 10000 (1000000 = 100.0000%)
+        uint24 fixedPercentage;     // scaled by 10000 (1000000 = 100.0000%)
         bool active;
     }
 
-    // Member storage
-    mapping(address => Member) public members;
-    address[] public memberList;
+    // Optimized storage layout
+    Member[] public members;                    // Primary member storage
+    mapping(address => uint256) public memberIndex;  // address -> array index + 1 (0 = not found)
+    uint64 public activeMemberCount;            // Track active member count
 
-    // Org member storage
-    mapping(address => OrgMember) public orgMembers;
-    address[] public orgMemberList;
+    OrgMember[] public orgMembers;              // Primary org member storage
+    mapping(address => uint256) public orgMemberIndex;  // address -> array index + 1
+    uint64 public activeOrgMemberCount;         // Track active org member count
 
     // Access control
     address public owner;
@@ -80,11 +83,15 @@ contract PGWeights {
     }
 
     /**
+     * @notice Transfer ownership
+     */
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid address");
+        owner = newOwner;
+    }
+
+    /**
      * @notice Add a new member to the protocol guild
-     * @param _memberAddress The member's address
-     * @param _joinYear Year when member joined (e.g., 2024)
-     * @param _joinMonth Month when member joined (1-12)
-     * @param _partTimeFactor Part-time factor 0-100 (100 = 100%, 50 = 50%)
      */
     function addMember(
         address _memberAddress,
@@ -93,28 +100,29 @@ contract PGWeights {
         uint8 _partTimeFactor
     ) external onlyManagerOrOwner {
         require(_memberAddress != address(0), "Invalid address");
-        require(members[_memberAddress].memberAddress == address(0), "Member already exists");
+        require(memberIndex[_memberAddress] == 0, "Member already exists");
         require(_partTimeFactor > 0 && _partTimeFactor <= 100, "Invalid part-time factor");
         require(_joinMonth >= 1 && _joinMonth <= 12, "Invalid month");
         require(_joinYear >= 1970 && _joinYear <= 2100, "Invalid year");
 
-        members[_memberAddress] = Member({
+        members.push(Member({
             memberAddress: _memberAddress,
             joinYear: _joinYear,
             joinMonth: _joinMonth,
             partTimeFactor: _partTimeFactor,
             monthsOnBreak: 0,
             active: true
-        });
+        }));
 
-        memberList.push(_memberAddress);
+        memberIndex[_memberAddress] = members.length; // Store index + 1
+        activeMemberCount++;
+
         emit MemberAdded(_memberAddress, _joinYear, _joinMonth, _partTimeFactor);
     }
 
     /**
      * @notice Mass import members from a byte stream
      * @dev Each member entry is 27 bytes: address(20) + joinYear(2) + joinMonth(1) + partTimeFactor(1) + monthsOnBreak(2) + active(1)
-     * @param _data Byte stream containing packed member data
      */
     function importMembers(bytes calldata _data) external onlyManagerOrOwner {
         require(_data.length % 27 == 0, "Invalid data length");
@@ -132,43 +140,35 @@ contract PGWeights {
 
             // Decode member data from bytes
             assembly {
-                // Load address (20 bytes)
                 memberAddress := shr(96, calldataload(add(_data.offset, offset)))
-
-                // Load joinYear (2 bytes at offset 20)
                 joinYear := shr(240, calldataload(add(add(_data.offset, offset), 20)))
-
-                // Load joinMonth (1 byte at offset 22)
                 joinMonth := shr(248, calldataload(add(add(_data.offset, offset), 22)))
-
-                // Load partTimeFactor (1 byte at offset 23)
                 partTimeFactor := shr(248, calldataload(add(add(_data.offset, offset), 23)))
-
-                // Load monthsOnBreak (2 bytes at offset 24)
                 monthsOnBreak := shr(240, calldataload(add(add(_data.offset, offset), 24)))
-
-                // Load active (1 byte at offset 26)
                 active := shr(248, calldataload(add(add(_data.offset, offset), 26)))
             }
 
             // Validate member data
             require(memberAddress != address(0), "Invalid address");
-            require(members[memberAddress].memberAddress == address(0), "Member already exists");
+            require(memberIndex[memberAddress] == 0, "Member already exists");
             require(partTimeFactor > 0 && partTimeFactor <= 100, "Invalid part-time factor");
             require(joinMonth >= 1 && joinMonth <= 12, "Invalid month");
             require(joinYear >= 1970 && joinYear <= 2100, "Invalid year");
 
-            // Add member
-            members[memberAddress] = Member({
+            members.push(Member({
                 memberAddress: memberAddress,
                 joinYear: joinYear,
                 joinMonth: joinMonth,
                 partTimeFactor: partTimeFactor,
                 monthsOnBreak: monthsOnBreak,
                 active: active
-            });
+            }));
 
-            memberList.push(memberAddress);
+            memberIndex[memberAddress] = members.length; // Store index + 1
+            if (active) {
+                activeMemberCount++;
+            }
+
             emit MemberAdded(memberAddress, joinYear, joinMonth, partTimeFactor);
 
             offset += 27;
@@ -177,10 +177,6 @@ contract PGWeights {
 
     /**
      * @notice Update an existing member's details
-     * @param _memberAddress The member's address
-     * @param _partTimeFactor New part-time factor 0-100
-     * @param _monthsOnBreak New months on break count
-     * @param _active Whether the member is currently active (false for temporary leave)
      */
     function updateMember(
         address _memberAddress,
@@ -188,131 +184,136 @@ contract PGWeights {
         uint16 _monthsOnBreak,
         bool _active
     ) external onlyManagerOrOwner {
-        require(members[_memberAddress].memberAddress != address(0), "Member not found");
+        uint256 idx = memberIndex[_memberAddress];
+        require(idx > 0, "Member not found");
+        idx--; // Convert to 0-based index
+
         require(_partTimeFactor > 0 && _partTimeFactor <= 100, "Invalid part-time factor");
 
-        members[_memberAddress].partTimeFactor = _partTimeFactor;
-        members[_memberAddress].monthsOnBreak = _monthsOnBreak;
-        members[_memberAddress].active = _active;
+        Member storage member = members[idx];
+        bool wasActive = member.active;
+
+        member.partTimeFactor = _partTimeFactor;
+        member.monthsOnBreak = _monthsOnBreak;
+        member.active = _active;
+
+        // Update active count
+        if (wasActive && !_active) {
+            activeMemberCount--;
+        } else if (!wasActive && _active) {
+            activeMemberCount++;
+        }
 
         emit MemberUpdated(_memberAddress, _partTimeFactor, _monthsOnBreak);
     }
 
     /**
      * @notice Add an organization member with fixed percentage
-     * @param _memberAddress The member's address
-     * @param _fixedPercentage Fixed percentage scaled by 10000 (50000 = 5.0000%)
      */
     function addOrgMember(
         address _memberAddress,
-        uint96 _fixedPercentage
+        uint24 _fixedPercentage
     ) external onlyManagerOrOwner {
         require(_memberAddress != address(0), "Invalid address");
-        require(orgMembers[_memberAddress].memberAddress == address(0), "Org member already exists");
+        require(orgMemberIndex[_memberAddress] == 0, "Org member already exists");
         require(_fixedPercentage > 0 && _fixedPercentage <= 1000000, "Invalid percentage");
 
-        orgMembers[_memberAddress] = OrgMember({
+        orgMembers.push(OrgMember({
             memberAddress: _memberAddress,
             fixedPercentage: _fixedPercentage,
             active: true
-        });
+        }));
 
-        orgMemberList.push(_memberAddress);
+        orgMemberIndex[_memberAddress] = orgMembers.length; // Store index + 1
+        activeOrgMemberCount++;
+
         emit OrgMemberAdded(_memberAddress, _fixedPercentage);
     }
 
     /**
      * @notice Update an organization member's fixed percentage
-     * @param _memberAddress The member's address
-     * @param _fixedPercentage New fixed percentage scaled by 10000
-     * @param _active Whether the org member is active
      */
     function updateOrgMember(
         address _memberAddress,
-        uint96 _fixedPercentage,
+        uint24 _fixedPercentage,
         bool _active
     ) external onlyManagerOrOwner {
-        require(orgMembers[_memberAddress].memberAddress != address(0), "Org member not found");
+        uint256 idx = orgMemberIndex[_memberAddress];
+        require(idx > 0, "Org member not found");
+        idx--; // Convert to 0-based index
+
         require(_fixedPercentage > 0 && _fixedPercentage <= 1000000, "Invalid percentage");
 
-        orgMembers[_memberAddress].fixedPercentage = _fixedPercentage;
-        orgMembers[_memberAddress].active = _active;
+        OrgMember storage orgMember = orgMembers[idx];
+        bool wasActive = orgMember.active;
+
+        orgMember.fixedPercentage = _fixedPercentage;
+        orgMember.active = _active;
+
+        // Update active count
+        if (wasActive && !_active) {
+            activeOrgMemberCount--;
+        } else if (!wasActive && _active) {
+            activeOrgMemberCount++;
+        }
 
         emit OrgMemberUpdated(_memberAddress, _fixedPercentage);
     }
 
     /**
      * @notice Delete an organization member
-     * @param _memberAddress The member's address
      */
     function delOrgMember(address _memberAddress) external onlyManagerOrOwner {
-        require(orgMembers[_memberAddress].memberAddress != address(0), "Org member not found");
+        uint256 idx = orgMemberIndex[_memberAddress];
+        require(idx > 0, "Org member not found");
+        idx--; // Convert to 0-based index
 
-        orgMembers[_memberAddress].memberAddress = address(0);
-        orgMembers[_memberAddress].active = false;
-
-        // Remove from orgMemberList
-        for (uint256 i = 0; i < orgMemberList.length; i++) {
-            if (orgMemberList[i] == _memberAddress) {
-                orgMemberList[i] = orgMemberList[orgMemberList.length - 1];
-                orgMemberList.pop();
-                break;
-            }
+        if (orgMembers[idx].active) {
+            activeOrgMemberCount--;
         }
+
+        // Swap with last element and pop
+        uint256 lastIdx = orgMembers.length - 1;
+        if (idx != lastIdx) {
+            OrgMember memory lastMember = orgMembers[lastIdx];
+            orgMembers[idx] = lastMember;
+            orgMemberIndex[lastMember.memberAddress] = idx + 1; // Update moved element's index
+        }
+
+        orgMembers.pop();
+        delete orgMemberIndex[_memberAddress];
 
         emit OrgMemberDeleted(_memberAddress);
     }
 
     /**
      * @notice Delete a member from the protocol guild
-     * @param _memberAddress The member's address
      */
     function delMember(address _memberAddress) external onlyManagerOrOwner {
-        require(members[_memberAddress].memberAddress != address(0), "Member not found");
+        uint256 idx = memberIndex[_memberAddress];
+        require(idx > 0, "Member not found");
+        idx--; // Convert to 0-based index
 
-        members[_memberAddress].memberAddress = address(0);
-        members[_memberAddress].active = false;
-
-        // Remove from memberList
-        for (uint256 i = 0; i < memberList.length; i++) {
-            if (memberList[i] == _memberAddress) {
-                memberList[i] = memberList[memberList.length - 1];
-                memberList.pop();
-                break;
-            }
+        if (members[idx].active) {
+            activeMemberCount--;
         }
+
+        // Swap with last element and pop
+        uint256 lastIdx = members.length - 1;
+        if (idx != lastIdx) {
+            Member memory lastMember = members[lastIdx];
+            members[idx] = lastMember;
+            memberIndex[lastMember.memberAddress] = idx + 1; // Update moved element's index
+        }
+
+        members.pop();
+        delete memberIndex[_memberAddress];
 
         emit MemberDeleted(_memberAddress);
     }
 
     /**
-     * @notice Calculate the raw weight for a member at a specific cutoff date
-     * @dev Weight = sqrt((monthsJoined - monthsOnBreak) * partTimeFactor)
-     * @param _memberAddress The member's address
-     * @param _cutoffYear Cutoff year (e.g., 2025)
-     * @param _cutoffMonth Cutoff month (1-12)
-     * @return sqrtWeight Raw weight value scaled by 1e6 (6 decimal places)
-     * @return activeMonths Effective months (total - break)
-     */
-    function calculateMemberWeight(
-        address _memberAddress,
-        uint16 _cutoffYear,
-        uint8 _cutoffMonth
-    ) public view returns (uint256 sqrtWeight, uint256 activeMonths) {
-        Member memory member = members[_memberAddress];
-        require(member.memberAddress != address(0), "Member not found");
-        return _calculateWeightFromMember(member, _cutoffYear, _cutoffMonth);
-    }
-
-    /**
      * @notice Get detailed breakdown for a member's weight calculation
-     * @param _memberAddress The member's address
-     * @param _cutoffYear Cutoff year (e.g., 2025)
-     * @param _cutoffMonth Cutoff month (1-12)
-     * @return monthsSinceJoin Raw months from join date to cutoff (inclusive)
-     * @return activeMonths Effective months (monthsSinceJoin - monthsOnBreak)
-     * @return weightedMonths Active months adjusted by part-time factor
-     * @return sqrtWeight Square root weight scaled by 1e6
      */
     function getMemberBreakdown(
         address _memberAddress,
@@ -324,90 +325,38 @@ contract PGWeights {
         uint256 weightedMonths,
         uint256 sqrtWeight
     ) {
-        Member memory member = members[_memberAddress];
-        require(member.memberAddress != address(0), "Member not found");
+        uint256 idx = memberIndex[_memberAddress];
+        require(idx > 0, "Member not found");
 
-        monthsSinceJoin = getMonthsDifference(
-            member.joinYear,
-            member.joinMonth,
-            _cutoffYear,
-            _cutoffMonth
-        );
+        Member memory member = members[idx - 1];
 
-        activeMonths = monthsSinceJoin > member.monthsOnBreak
-            ? monthsSinceJoin - member.monthsOnBreak
-            : 0;
+        // Inline month calculation with unchecked math
+        unchecked {
+            if (_cutoffYear >= member.joinYear) {
+                if (_cutoffYear == member.joinYear && _cutoffMonth < member.joinMonth) {
+                    monthsSinceJoin = 0;
+                } else {
+                    monthsSinceJoin = (uint256(_cutoffYear - member.joinYear)) * 12
+                                    + uint256(_cutoffMonth)
+                                    - uint256(member.joinMonth);
+                }
+            }
+            // else monthsSinceJoin = 0
 
-        weightedMonths = (activeMonths * member.partTimeFactor) / 100;
+            activeMonths = monthsSinceJoin > member.monthsOnBreak
+                ? monthsSinceJoin - member.monthsOnBreak
+                : 0;
 
-        sqrtWeight = sqrt(weightedMonths * 1e12);
+            weightedMonths = (activeMonths * member.partTimeFactor) / 100;
+        }
+
+        sqrtWeight = _getSqrtWeight(weightedMonths);
 
         return (monthsSinceJoin, activeMonths, weightedMonths, sqrtWeight);
     }
 
     /**
-     * @notice Calculate weight from a Member struct already in memory
-     * @dev Internal helper to avoid duplicate storage reads
-     */
-    function _calculateWeightFromMember(
-        Member memory member,
-        uint16 _cutoffYear,
-        uint8 _cutoffMonth
-    ) internal pure returns (uint256 sqrtWeight, uint256 activeMonths) {
-        // Calculate months since joining (inclusive on both ends)
-        uint256 monthsSinceJoin = getMonthsDifference(
-            member.joinYear,
-            member.joinMonth,
-            _cutoffYear,
-            _cutoffMonth
-        );
-
-        // Ensure we don't go negative
-        activeMonths = monthsSinceJoin > member.monthsOnBreak
-            ? monthsSinceJoin - member.monthsOnBreak
-            : 0;
-
-        // Calculate: effectiveMonths * partTimeFactor (0-100)
-        uint256 weightedMonths = (activeMonths * member.partTimeFactor) / 100;
-
-        // Return square root with 6 decimal places and active months
-        // Scale by 1e12 before sqrt to get 1e6 precision (6 decimals)
-        sqrtWeight = sqrt(weightedMonths * 1e12);
-        return (sqrtWeight, activeMonths);
-    }
-
-    /**
-     * @notice Calculate number of months between two year/month dates (inclusive)
-     * @param fromYear Starting year
-     * @param fromMonth Starting month (1-12)
-     * @param toYear Ending year
-     * @param toMonth Ending month (1-12)
-     * @return Number of months (inclusive on both ends)
-     */
-    function getMonthsDifference(
-        uint16 fromYear,
-        uint8 fromMonth,
-        uint16 toYear,
-        uint8 toMonth
-    ) internal pure returns (uint256) {
-        // If cutoff is before join date, return 0
-        if (toYear < fromYear || (toYear == fromYear && toMonth < fromMonth)) {
-            return 0;
-        }
-
-        // Calculate total months difference
-        int256 totalMonths = int256(uint256(toYear - fromYear)) * 12 + int256(uint256(toMonth)) - int256(uint256(fromMonth));
-
-        // Add 1 to make both ends inclusive
-        return totalMonths >= 0 ? uint256(totalMonths) : 0;
-    }
-
-    /**
      * @notice Get all active members and their weights as percentages at a specific cutoff date
-     * @param _cutoffYear Cutoff year (e.g., 2025)
-     * @param _cutoffMonth Cutoff month (1-12)
-     * @return results Array of WeightResult structs (address + percentage)
-     * @return gasUsed Total gas consumed by the function
      */
     function getAllWeights(
         uint16 _cutoffYear,
@@ -418,35 +367,17 @@ contract PGWeights {
     ) {
         uint256 gasStart = gasleft();
 
-        // Count active members
-        (uint256 activeMemberCount, uint256 activeOrgCount) = _countActiveMembers();
-
-        results = new WeightResult[](activeMemberCount + activeOrgCount);
+        uint256 totalMembers = uint256(activeMemberCount) + uint256(activeOrgMemberCount);
+        results = new WeightResult[](totalMembers);
 
         // Process org members and get remaining percentage
         uint96 remainingPercentage = _processOrgMembers(results);
 
         // Process regular members
-        _processRegularMembers(results, activeOrgCount, activeMemberCount, remainingPercentage, _cutoffYear, _cutoffMonth);
+        _processRegularMembers(results, activeOrgMemberCount, activeMemberCount, remainingPercentage, _cutoffYear, _cutoffMonth);
 
         gasUsed = gasStart - gasleft();
         return (results, gasUsed);
-    }
-
-    /**
-     * @notice Count active members and org members
-     */
-    function _countActiveMembers() internal view returns (uint256 activeMemberCount, uint256 activeOrgCount) {
-        for (uint256 i = 0; i < memberList.length; i++) {
-            if (members[memberList[i]].active) {
-                activeMemberCount++;
-            }
-        }
-        for (uint256 i = 0; i < orgMemberList.length; i++) {
-            if (orgMembers[orgMemberList[i]].active) {
-                activeOrgCount++;
-            }
-        }
     }
 
     /**
@@ -455,20 +386,25 @@ contract PGWeights {
      */
     function _processOrgMembers(WeightResult[] memory results) internal view returns (uint96 remainingPercentage) {
         uint96 totalOrgPercentage = 0;
-        uint256 index = 0;
+        uint256 resultIndex = 0;
 
-        // Calculate total and add org members
-        for (uint256 i = 0; i < orgMemberList.length; i++) {
-            if (orgMembers[orgMemberList[i]].active) {
-                totalOrgPercentage += orgMembers[orgMemberList[i]].fixedPercentage;
-                results[index].memberAddress = orgMemberList[i];
-                results[index].percentage = orgMembers[orgMemberList[i]].fixedPercentage;
-                index++;
+        uint256 orgMemberCount = orgMembers.length;
+        for (uint256 i = 0; i < orgMemberCount; i++) {
+            OrgMember memory orgMember = orgMembers[i];
+            if (orgMember.active) {
+                unchecked {
+                    totalOrgPercentage += orgMember.fixedPercentage;
+                }
+                results[resultIndex].memberAddress = orgMember.memberAddress;
+                results[resultIndex].percentage = orgMember.fixedPercentage;
+                resultIndex++;
             }
         }
 
         require(totalOrgPercentage <= 1000000, "Org percentages exceed 100%");
-        remainingPercentage = 1000000 - totalOrgPercentage;
+        unchecked {
+            remainingPercentage = 1000000 - totalOrgPercentage;
+        }
     }
 
     /**
@@ -477,111 +413,66 @@ contract PGWeights {
     function _processRegularMembers(
         WeightResult[] memory results,
         uint256 startIndex,
-        uint256 memberCount,
+        uint256 activeMembers,
         uint96 remainingPercentage,
         uint16 cutoffYear,
         uint8 cutoffMonth
     ) internal view {
-        if (memberCount == 0 || remainingPercentage == 0) return;
+        if (activeMembers == 0 || remainingPercentage == 0) return;
 
-        uint256[] memory rawWeights = new uint256[](memberCount);
-        uint256[] memory sqrtCache = new uint256[](101); // Sqrt cache for weighted months 0-100
+        uint256[] memory rawWeights = new uint256[](activeMembers);
         uint256 totalWeight = 0;
+        uint256 activeIdx = 0;
 
-        // Calculate raw weights with lazy sqrt caching
-        totalWeight = _calculateRawWeights(
-            rawWeights,
-            sqrtCache,
-            results,
-            startIndex,
-            cutoffYear,
-            cutoffMonth
-        );
+        // Calculate raw weights - optimized single SLOAD per member
+        for (uint256 i = 0; i < members.length; i++) {
+            Member memory m = members[i];
+
+            if (m.active) {
+                uint256 wm; // weighted months
+
+                // Inline month calculation with unchecked math
+                unchecked {
+                    uint256 ms = 0; // months since join
+                    if (cutoffYear >= m.joinYear) {
+                        if (cutoffYear == m.joinYear && cutoffMonth >= m.joinMonth) {
+                            ms = uint256(cutoffMonth) - uint256(m.joinMonth);
+                        } else if (cutoffYear > m.joinYear) {
+                            ms = (uint256(cutoffYear - m.joinYear)) * 12 + uint256(cutoffMonth) - uint256(m.joinMonth);
+                        }
+                    }
+
+                    uint256 am = ms > m.monthsOnBreak ? ms - m.monthsOnBreak : 0; // active months
+                    wm = (am * m.partTimeFactor) / 100;
+                }
+
+                uint256 sw = _getSqrtWeight(wm);
+                rawWeights[activeIdx] = sw;
+                unchecked { totalWeight += sw; }
+                results[startIndex + activeIdx].memberAddress = m.memberAddress;
+                unchecked { activeIdx++; }
+            }
+        }
 
         // Convert raw weights to percentages
         if (totalWeight > 0) {
-            for (uint256 i = 0; i < memberCount; i++) {
-                results[startIndex + i].percentage = uint96((rawWeights[i] * remainingPercentage) / totalWeight);
+            unchecked {
+                for (uint256 i = 0; i < activeMembers; i++) {
+                    results[startIndex + i].percentage = uint96((rawWeights[i] * remainingPercentage) / totalWeight);
+                }
             }
         }
-    }
-
-    /**
-     * @notice Calculate raw weights for all active members
-     * @return totalWeight Sum of all raw weights
-     */
-    function _calculateRawWeights(
-        uint256[] memory rawWeights,
-        uint256[] memory sqrtCache,
-        WeightResult[] memory results,
-        uint256 startIndex,
-        uint16 cutoffYear,
-        uint8 cutoffMonth
-    ) internal view returns (uint256 totalWeight) {
-        uint256 memberIndex = 0;
-
-        for (uint256 i = 0; i < memberList.length; i++) {
-            Member memory member = members[memberList[i]];
-
-            if (member.active) {
-                // Calculate weighted months
-                uint256 monthsSinceJoin = getMonthsDifference(
-                    member.joinYear,
-                    member.joinMonth,
-                    cutoffYear,
-                    cutoffMonth
-                );
-
-                uint256 activeMonths = monthsSinceJoin > member.monthsOnBreak
-                    ? monthsSinceJoin - member.monthsOnBreak
-                    : 0;
-
-                uint256 weightedMonths = (activeMonths * member.partTimeFactor) / 100;
-
-                // Get sqrt weight (cached if possible)
-                uint256 sqrtWeight = _getSqrtWeight(sqrtCache, weightedMonths);
-
-                rawWeights[memberIndex] = sqrtWeight;
-                totalWeight += sqrtWeight;
-                results[startIndex + memberIndex].memberAddress = memberList[i];
-                memberIndex++;
-            }
-        }
-    }
-
-    /**
-     * @notice Get sqrt weight with lazy caching
-     */
-    function _getSqrtWeight(
-        uint256[] memory sqrtCache,
-        uint256 weightedMonths
-    ) internal pure returns (uint256) {
-        if (weightedMonths <= 100) {
-            uint256 cached = sqrtCache[weightedMonths];
-            if (cached == 0 && weightedMonths > 0) {
-                cached = sqrt(weightedMonths * 1e12);
-                sqrtCache[weightedMonths] = cached;
-            }
-            return cached;
-        }
-        return sqrt(weightedMonths * 1e12);
     }
 
     /**
      * @notice Get the total number of active members
      */
     function getActiveMemberCount() external view returns (uint256) {
-        uint256 count = 0;
-        for (uint256 i = 0; i < memberList.length; i++) {
-            if (members[memberList[i]].active) {
-                count++;
-            }
-        }
-        return count;
+        return activeMemberCount;
     }
 
     /**
-     * @notice Get member details
+     * @notice Get member details by address
      */
     function getMember(address _memberAddress) external view returns (
         address memberAddress,
@@ -591,7 +482,10 @@ contract PGWeights {
         uint16 monthsOnBreak,
         bool active
     ) {
-        Member memory member = members[_memberAddress];
+        uint256 idx = memberIndex[_memberAddress];
+        require(idx > 0, "Member not found");
+
+        Member memory member = members[idx - 1];
         return (
             member.memberAddress,
             member.joinYear,
@@ -603,19 +497,98 @@ contract PGWeights {
     }
 
     /**
-     * @notice Get org member details
+     * @notice Get org member details by address
      */
     function getOrgMember(address _memberAddress) external view returns (
         address memberAddress,
         uint96 fixedPercentage,
         bool active
     ) {
-        OrgMember memory orgMember = orgMembers[_memberAddress];
+        uint256 idx = orgMemberIndex[_memberAddress];
+        require(idx > 0, "Org member not found");
+
+        OrgMember memory orgMember = orgMembers[idx - 1];
         return (
             orgMember.memberAddress,
             orgMember.fixedPercentage,
             orgMember.active
         );
+    }
+
+    /**
+     * @notice Get sqrt weight using binary search tree
+     * @dev Balanced binary search for weighted months 1-100 (max 7 comparisons)
+     *      Computes sqrt on-the-fly for values > 100
+     */
+    function _getSqrtWeight(uint256 wm) internal pure returns (uint256) {
+        if (wm == 0) return 0;
+        if (wm > 100) return sqrt(wm * 1e12);
+
+        // Binary search: max 7 comparisons for any value 1-100
+        if (wm <= 50) {
+            if (wm <= 25) {
+                if (wm <= 12) {
+                    if (wm <= 6) {
+                        if (wm <= 3) { if (wm == 1) return 1000000; if (wm == 2) return 1414213; return 1732050; }
+                        if (wm == 4) return 2000000; if (wm == 5) return 2236067; return 2449489;
+                    }
+                    if (wm <= 9) { if (wm == 7) return 2645751; if (wm == 8) return 2828427; return 3000000; }
+                    if (wm == 10) return 3162277; if (wm == 11) return 3316624; return 3464101;
+                }
+                if (wm <= 18) {
+                    if (wm <= 15) { if (wm == 13) return 3605551; if (wm == 14) return 3741657; return 3872983; }
+                    if (wm == 16) return 4000000; if (wm == 17) return 4123105; return 4242640;
+                }
+                if (wm <= 21) { if (wm == 19) return 4358898; if (wm == 20) return 4472135; return 4582575; }
+                if (wm == 22) return 4690415; if (wm == 23) return 4795831; if (wm == 24) return 4898979; return 5000000;
+            }
+            if (wm <= 37) {
+                if (wm <= 31) {
+                    if (wm <= 28) { if (wm == 26) return 5099019; if (wm == 27) return 5196152; return 5291502; }
+                    if (wm == 29) return 5385164; if (wm == 30) return 5477225; return 5567764;
+                }
+                if (wm <= 34) { if (wm == 32) return 5656854; if (wm == 33) return 5744562; return 5830951; }
+                if (wm == 35) return 5916079; if (wm == 36) return 6000000; return 6082762;
+            }
+            if (wm <= 43) {
+                if (wm <= 40) { if (wm == 38) return 6164414; if (wm == 39) return 6244997; return 6324555; }
+                if (wm == 41) return 6403124; if (wm == 42) return 6480740; return 6557438;
+            }
+            if (wm <= 46) { if (wm == 44) return 6633249; if (wm == 45) return 6708203; return 6782329; }
+            if (wm == 47) return 6855654; if (wm == 48) return 6928203; if (wm == 49) return 7000000; return 7071067;
+        }
+
+        if (wm <= 75) {
+            if (wm <= 62) {
+                if (wm <= 56) {
+                    if (wm <= 53) { if (wm == 51) return 7141428; if (wm == 52) return 7211102; return 7280109; }
+                    if (wm == 54) return 7348469; if (wm == 55) return 7416198; return 7483314;
+                }
+                if (wm <= 59) { if (wm == 57) return 7549834; if (wm == 58) return 7615773; return 7681145; }
+                if (wm == 60) return 7745966; if (wm == 61) return 7810249; return 7874007;
+            }
+            if (wm <= 68) {
+                if (wm <= 65) { if (wm == 63) return 7937253; if (wm == 64) return 8000000; return 8062257; }
+                if (wm == 66) return 8124038; if (wm == 67) return 8185352; return 8246211;
+            }
+            if (wm <= 71) { if (wm == 69) return 8306623; if (wm == 70) return 8366600; return 8426149; }
+            if (wm == 72) return 8485281; if (wm == 73) return 8544003; if (wm == 74) return 8602325; return 8660254;
+        }
+
+        if (wm <= 87) {
+            if (wm <= 81) {
+                if (wm <= 78) { if (wm == 76) return 8717797; if (wm == 77) return 8774964; return 8831760; }
+                if (wm == 79) return 8888194; if (wm == 80) return 8944271; return 9000000;
+            }
+            if (wm <= 84) { if (wm == 82) return 9055385; if (wm == 83) return 9110433; return 9165151; }
+            if (wm == 85) return 9219544; if (wm == 86) return 9273618; return 9327379;
+        }
+        if (wm <= 93) {
+            if (wm <= 90) { if (wm == 88) return 9380831; if (wm == 89) return 9433981; return 9486832; }
+            if (wm == 91) return 9539392; if (wm == 92) return 9591663; return 9643650;
+        }
+        if (wm <= 96) { if (wm == 94) return 9695359; if (wm == 95) return 9746794; return 9797958; }
+        if (wm == 97) return 9848857; if (wm == 98) return 9899494; if (wm == 99) return 9949874; return 10000000;
     }
 
     /**
@@ -634,13 +607,5 @@ contract PGWeights {
         }
 
         return y;
-    }
-
-    /**
-     * @notice Transfer ownership
-     */
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "Invalid address");
-        owner = newOwner;
     }
 }
