@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "./SqrtLookup.sol";
+
 /**
  * @title PGWeights
  * @notice Protocol Guild member weights tracking contract
@@ -516,79 +518,13 @@ contract PGWeights {
     }
 
     /**
-     * @notice Get sqrt weight using binary search tree
-     * @dev Balanced binary search for weighted months 1-100 (max 7 comparisons)
-     *      Computes sqrt on-the-fly for values > 100
+     * @notice Get sqrt weight using lookup table or on-demand calculation
+     * @dev Uses SqrtLookup library for values 1-100, computes for values > 100
      */
     function _getSqrtWeight(uint256 wm) internal pure returns (uint256) {
         if (wm == 0) return 0;
-        if (wm > 100) return sqrt(wm * 1e12);
-
-        // Binary search: max 7 comparisons for any value 1-100
-        if (wm <= 50) {
-            if (wm <= 25) {
-                if (wm <= 12) {
-                    if (wm <= 6) {
-                        if (wm <= 3) { if (wm == 1) return 1000000; if (wm == 2) return 1414213; return 1732050; }
-                        if (wm == 4) return 2000000; if (wm == 5) return 2236067; return 2449489;
-                    }
-                    if (wm <= 9) { if (wm == 7) return 2645751; if (wm == 8) return 2828427; return 3000000; }
-                    if (wm == 10) return 3162277; if (wm == 11) return 3316624; return 3464101;
-                }
-                if (wm <= 18) {
-                    if (wm <= 15) { if (wm == 13) return 3605551; if (wm == 14) return 3741657; return 3872983; }
-                    if (wm == 16) return 4000000; if (wm == 17) return 4123105; return 4242640;
-                }
-                if (wm <= 21) { if (wm == 19) return 4358898; if (wm == 20) return 4472135; return 4582575; }
-                if (wm == 22) return 4690415; if (wm == 23) return 4795831; if (wm == 24) return 4898979; return 5000000;
-            }
-            if (wm <= 37) {
-                if (wm <= 31) {
-                    if (wm <= 28) { if (wm == 26) return 5099019; if (wm == 27) return 5196152; return 5291502; }
-                    if (wm == 29) return 5385164; if (wm == 30) return 5477225; return 5567764;
-                }
-                if (wm <= 34) { if (wm == 32) return 5656854; if (wm == 33) return 5744562; return 5830951; }
-                if (wm == 35) return 5916079; if (wm == 36) return 6000000; return 6082762;
-            }
-            if (wm <= 43) {
-                if (wm <= 40) { if (wm == 38) return 6164414; if (wm == 39) return 6244997; return 6324555; }
-                if (wm == 41) return 6403124; if (wm == 42) return 6480740; return 6557438;
-            }
-            if (wm <= 46) { if (wm == 44) return 6633249; if (wm == 45) return 6708203; return 6782329; }
-            if (wm == 47) return 6855654; if (wm == 48) return 6928203; if (wm == 49) return 7000000; return 7071067;
-        }
-
-        if (wm <= 75) {
-            if (wm <= 62) {
-                if (wm <= 56) {
-                    if (wm <= 53) { if (wm == 51) return 7141428; if (wm == 52) return 7211102; return 7280109; }
-                    if (wm == 54) return 7348469; if (wm == 55) return 7416198; return 7483314;
-                }
-                if (wm <= 59) { if (wm == 57) return 7549834; if (wm == 58) return 7615773; return 7681145; }
-                if (wm == 60) return 7745966; if (wm == 61) return 7810249; return 7874007;
-            }
-            if (wm <= 68) {
-                if (wm <= 65) { if (wm == 63) return 7937253; if (wm == 64) return 8000000; return 8062257; }
-                if (wm == 66) return 8124038; if (wm == 67) return 8185352; return 8246211;
-            }
-            if (wm <= 71) { if (wm == 69) return 8306623; if (wm == 70) return 8366600; return 8426149; }
-            if (wm == 72) return 8485281; if (wm == 73) return 8544003; if (wm == 74) return 8602325; return 8660254;
-        }
-
-        if (wm <= 87) {
-            if (wm <= 81) {
-                if (wm <= 78) { if (wm == 76) return 8717797; if (wm == 77) return 8774964; return 8831760; }
-                if (wm == 79) return 8888194; if (wm == 80) return 8944271; return 9000000;
-            }
-            if (wm <= 84) { if (wm == 82) return 9055385; if (wm == 83) return 9110433; return 9165151; }
-            if (wm == 85) return 9219544; if (wm == 86) return 9273618; return 9327379;
-        }
-        if (wm <= 93) {
-            if (wm <= 90) { if (wm == 88) return 9380831; if (wm == 89) return 9433981; return 9486832; }
-            if (wm == 91) return 9539392; if (wm == 92) return 9591663; return 9643650;
-        }
-        if (wm <= 96) { if (wm == 94) return 9695359; if (wm == 95) return 9746794; return 9797958; }
-        if (wm == 97) return 9848857; if (wm == 98) return 9899494; if (wm == 99) return 9949874; return 10000000;
+        if (wm <= SqrtLookup.MAX_LOOKUP) return SqrtLookup.getSqrt(wm); // this is ultra hacky, but way more gas efficient than calculating sqrt on the fly
+        return sqrt(wm * 1e12);
     }
 
     /**

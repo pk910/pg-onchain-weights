@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Protocol Guild member weights tracking contract",
   "scripts": {
-    "compile": "hardhat compile",
+    "generate:sqrt": "node scripts/generate_sqrt_lookup.js",
+    "compile": "npm run generate:sqrt && hardhat compile",
+    "compile:quick": "hardhat compile",
     "test": "hardhat test",
     "deploy": "hardhat run scripts/deploy.js",
     "demo": "hardhat run scripts/demo.js",
