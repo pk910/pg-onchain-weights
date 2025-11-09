@@ -188,7 +188,7 @@ ${generateOptimizedTree(values)}
 `;
 
   // Write to file
-  const outputPath = path.join(__dirname, '../contracts/SqrtLookup.sol');
+  const outputPath = path.join(__dirname, '../contracts/libraries/SqrtLookup.sol');
   fs.writeFileSync(outputPath, contractCode);
 
   console.log('✓ Generated contracts/SqrtLookup.sol');

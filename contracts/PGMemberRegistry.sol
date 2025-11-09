@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./SqrtLookup.sol";
+import "./libraries/SqrtLookup.sol";
+import "./interfaces/IPGMemberRegistry.sol";
+import "./access/Ownable.sol";
 
 /**
  * @title PGWeights
@@ -9,7 +11,7 @@ import "./SqrtLookup.sol";
  * @dev Calculates member weights based on tenure and part-time factor
  *      Optimized storage layout: array-based with mapping index lookup
  */
-contract PGWeights {
+contract PGMemberRegistry is IPGMemberRegistry, Ownable {
     struct Member {
         address memberAddress;      // 20 bytes
         uint16 joinYear;            //  2 bytes - year when member joined (e.g., 2024)
@@ -20,77 +22,21 @@ contract PGWeights {
                                     //  5 bytes - reserve for future use
     }
 
-    struct WeightResult {
-        address memberAddress;      // 20 bytes
-        uint96 percentage;          // 12 bytes - scaled by 10000 (1000000 = 100.0000%)
-    }
-
     struct OrgMember {
         address memberAddress;
         uint24 fixedPercentage;     // scaled by 10000 (1000000 = 100.0000%)
         bool active;
     }
 
-    // Optimized storage layout
+    // Member Registry Storage
     Member[] public members;                    // Primary member storage
     mapping(address => uint256) public memberIndex;  // address -> array index + 1 (0 = not found)
-    uint64 public activeMemberCount;            // Track active member count
 
     OrgMember[] public orgMembers;              // Primary org member storage
     mapping(address => uint256) public orgMemberIndex;  // address -> array index + 1
+
+    uint64 public activeMemberCount;            // Track active member count
     uint64 public activeOrgMemberCount;         // Track active org member count
-
-    // Access control
-    address public owner;
-    mapping(address => bool) public managers;
-
-    // Events
-    event MemberAdded(address indexed memberAddress, uint16 joinYear, uint8 joinMonth, uint8 partTimeFactor);
-    event MemberUpdated(address indexed memberAddress, uint8 partTimeFactor, uint16 monthsOnBreak);
-    event MemberDeleted(address indexed memberAddress);
-    event OrgMemberAdded(address indexed memberAddress, uint96 fixedPercentage);
-    event OrgMemberUpdated(address indexed memberAddress, uint96 fixedPercentage);
-    event OrgMemberDeleted(address indexed memberAddress);
-    event ManagerAdded(address indexed manager);
-    event ManagerRemoved(address indexed manager);
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner");
-        _;
-    }
-
-    modifier onlyManagerOrOwner() {
-        require(msg.sender == owner || managers[msg.sender], "Only manager or owner");
-        _;
-    }
-
-    constructor() {
-        owner = msg.sender;
-    }
-
-    /**
-     * @notice Add a manager who can perform CRUD operations
-     */
-    function addManager(address _manager) external onlyOwner {
-        managers[_manager] = true;
-        emit ManagerAdded(_manager);
-    }
-
-    /**
-     * @notice Remove a manager
-     */
-    function removeManager(address _manager) external onlyOwner {
-        managers[_manager] = false;
-        emit ManagerRemoved(_manager);
-    }
-
-    /**
-     * @notice Transfer ownership
-     */
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "Invalid address");
-        owner = newOwner;
-    }
 
     /**
      * @notice Add a new member to the protocol guild
@@ -100,7 +46,7 @@ contract PGWeights {
         uint16 _joinYear,
         uint8 _joinMonth,
         uint8 _partTimeFactor
-    ) external onlyManagerOrOwner {
+    ) external onlyOwner {
         require(_memberAddress != address(0), "Invalid address");
         require(memberIndex[_memberAddress] == 0, "Member already exists");
         require(_partTimeFactor > 0 && _partTimeFactor <= 100, "Invalid part-time factor");
@@ -126,7 +72,7 @@ contract PGWeights {
      * @notice Mass import members from a byte stream
      * @dev Each member entry is 27 bytes: address(20) + joinYear(2) + joinMonth(1) + partTimeFactor(1) + monthsOnBreak(2) + active(1)
      */
-    function importMembers(bytes calldata _data) external onlyManagerOrOwner {
+    function importMembers(bytes calldata _data) external onlyOwner {
         require(_data.length % 27 == 0, "Invalid data length");
 
         uint256 memberCount = _data.length / 27;
@@ -185,7 +131,7 @@ contract PGWeights {
         uint8 _partTimeFactor,
         uint16 _monthsOnBreak,
         bool _active
-    ) external onlyManagerOrOwner {
+    ) external onlyOwner {
         uint256 idx = memberIndex[_memberAddress];
         require(idx > 0, "Member not found");
         idx--; // Convert to 0-based index
@@ -215,7 +161,7 @@ contract PGWeights {
     function addOrgMember(
         address _memberAddress,
         uint24 _fixedPercentage
-    ) external onlyManagerOrOwner {
+    ) external onlyOwner {
         require(_memberAddress != address(0), "Invalid address");
         require(orgMemberIndex[_memberAddress] == 0, "Org member already exists");
         require(_fixedPercentage > 0 && _fixedPercentage <= 1000000, "Invalid percentage");
@@ -239,7 +185,7 @@ contract PGWeights {
         address _memberAddress,
         uint24 _fixedPercentage,
         bool _active
-    ) external onlyManagerOrOwner {
+    ) external onlyOwner {
         uint256 idx = orgMemberIndex[_memberAddress];
         require(idx > 0, "Org member not found");
         idx--; // Convert to 0-based index
@@ -265,7 +211,7 @@ contract PGWeights {
     /**
      * @notice Delete an organization member
      */
-    function delOrgMember(address _memberAddress) external onlyManagerOrOwner {
+    function delOrgMember(address _memberAddress) external onlyOwner {
         uint256 idx = orgMemberIndex[_memberAddress];
         require(idx > 0, "Org member not found");
         idx--; // Convert to 0-based index
@@ -291,7 +237,7 @@ contract PGWeights {
     /**
      * @notice Delete a member from the protocol guild
      */
-    function delMember(address _memberAddress) external onlyManagerOrOwner {
+    function delMember(address _memberAddress) external onlyOwner {
         uint256 idx = memberIndex[_memberAddress];
         require(idx > 0, "Member not found");
         idx--; // Convert to 0-based index
@@ -471,6 +417,13 @@ contract PGWeights {
      */
     function getActiveMemberCount() external view returns (uint256) {
         return activeMemberCount;
+    }
+
+    /**
+     * @notice Get the total number of active org members
+     */
+    function getActiveOrgMemberCount() external view returns (uint256) {
+        return activeOrgMemberCount;
     }
 
     /**

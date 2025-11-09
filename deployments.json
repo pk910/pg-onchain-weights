@@ -1,0 +1,54 @@
+{
+  "sepolia": {
+    "testSplit_1762654392805": {
+      "address": "0x6596FA2c873bF0ed57E1234D3F6B29be5672F325",
+      "owner": "0xfcC2e9339e28467489e8AEe72F82A0C63103D0a2",
+      "created": "2025-11-09T02:13:12.805Z",
+      "allocation": {
+        "owner": "99.00%",
+        "dead": "1.00%"
+      }
+    },
+    "registry": "0x4983ef9Bc9C216D407fb768bf504c36f38DA0296",
+    "l1Controller": "0x9A35798C3Ce8c0FA5188A96D42C2586973E385ee",
+    "l2Module_base": "0x3F878576416A91ad67D9691923F34Dc4609BdE71",
+    "l2Module_optimism": "0x796b758bdc22FE78E0fdB2e16b1F82d81D2c7028",
+    "l2Module_arbitrum": "0x25598a9274C4f2cebAfC39aa9b8eF41EDd2f6Cd1",
+    "l2Controller_base": "0x1258Da80eCE4c52dD706b58EBfD4b6752A01cdD7",
+    "l2Controller_optimism": "0x1258Da80eCE4c52dD706b58EBfD4b6752A01cdD7",
+    "l2Controller_arbitrum": "0x3d99296aC9a5Fbe4F156e486B6DdC32A4a0271F0"
+  },
+  "opSepolia": {
+    "testSplit_1762654420639": {
+      "address": "0x6596FA2c873bF0ed57E1234D3F6B29be5672F325",
+      "owner": "0xfcC2e9339e28467489e8AEe72F82A0C63103D0a2",
+      "created": "2025-11-09T02:13:40.639Z",
+      "allocation": {
+        "owner": "99.00%",
+        "dead": "1.00%"
+      }
+    }
+  },
+  "baseSepolia": {
+    "testSplit_1762654427313": {
+      "address": "0x6596FA2c873bF0ed57E1234D3F6B29be5672F325",
+      "owner": "0xfcC2e9339e28467489e8AEe72F82A0C63103D0a2",
+      "created": "2025-11-09T02:13:47.313Z",
+      "allocation": {
+        "owner": "99.00%",
+        "dead": "1.00%"
+      }
+    }
+  },
+  "arbSepolia": {
+    "testSplit_1762654436298": {
+      "address": "0x6596FA2c873bF0ed57E1234D3F6B29be5672F325",
+      "owner": "0xfcC2e9339e28467489e8AEe72F82A0C63103D0a2",
+      "created": "2025-11-09T02:13:56.298Z",
+      "allocation": {
+        "owner": "99.00%",
+        "dead": "1.00%"
+      }
+    }
+  }
+}

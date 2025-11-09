@@ -1,3 +1,4 @@
+// Demo script for PGMemberRegistry - Deploy, Import & Calculate
 const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
@@ -32,7 +33,7 @@ async function main() {
   }
 
   console.log("=".repeat(80));
-  console.log("PGWeights Contract Demo - Deploy, Import & Calculate");
+  console.log("PGMemberRegistry Demo - Deploy, Import & Calculate");
   console.log("=".repeat(80));
 
   const [deployer] = await hre.ethers.getSigners();
@@ -40,10 +41,10 @@ async function main() {
   console.log("   Deployer:", deployer.address);
 
   // Deploy
-  const PGWeights = await hre.ethers.getContractFactory("PGWeights");
-  const pgWeights = await PGWeights.deploy();
-  await pgWeights.waitForDeployment();
-  const address = await pgWeights.getAddress();
+  const PGMemberRegistry = await hre.ethers.getContractFactory("PGMemberRegistry");
+  const registry = await PGMemberRegistry.deploy();
+  await registry.waitForDeployment();
+  const address = await registry.getAddress();
   console.log("   ✓ Contract deployed to:", address);
 
   // Read import data (batched)
@@ -81,7 +82,7 @@ async function main() {
     const batchMembers = Math.floor((batchData.length - 2) / 54);
 
     console.log(`   Batch ${i + 1}/${importBatches.length}: ${batchMembers} members...`);
-    const importTx = await pgWeights.importMembers(batchData);
+    const importTx = await registry.importMembers(batchData);
     const importReceipt = await importTx.wait();
     totalGasUsed += importReceipt.gasUsed;
     console.log(`   ✓ Batch ${i + 1} imported (${importReceipt.gasUsed.toString()} gas)`);
@@ -92,14 +93,14 @@ async function main() {
   console.log("   → Gas per member:", Math.floor(Number(totalGasUsed) / totalMembers));
 
   // Verify import
-  const activeMemberCount = await pgWeights.getActiveMemberCount();
+  const activeMemberCount = await registry.getActiveMemberCount();
   console.log("   → Active members:", activeMemberCount.toString());
 
   // Add org member (example: 5% fixed allocation)
   console.log("\n4. Adding org member with 5% fixed allocation...");
   const orgAddress = "0xccccEbdBdA2D68bABA6da99449b9CA41Dba9d4FF";
   const orgPercentage = 50000; // 5.0000%
-  const addOrgTx = await pgWeights.addOrgMember(orgAddress, orgPercentage);
+  const addOrgTx = await registry.addOrgMember(orgAddress, orgPercentage);
   const addOrgReceipt = await addOrgTx.wait();
   console.log("   ✓ Org member added");
   console.log("   → Gas used:", addOrgReceipt.gasUsed.toString());
@@ -110,11 +111,11 @@ async function main() {
   console.log(`\n5. Calculating weights for ${monthNames[cutoffMonth]} ${cutoffYear}...`);
 
   // Call with gas estimation
-  const estimatedGas = await pgWeights.getAllWeights.estimateGas(cutoffYear, cutoffMonth);
+  const estimatedGas = await registry.getAllWeights.estimateGas(cutoffYear, cutoffMonth);
   console.log("   → Estimated gas:", estimatedGas.toString());
 
   // Call the function (read-only, no transaction)
-  const [results, gasUsed] = await pgWeights.getAllWeights(cutoffYear, cutoffMonth);
+  const [results, gasUsed] = await registry.getAllWeights(cutoffYear, cutoffMonth);
   console.log("   ✓ Weights calculated");
   console.log("   → Actual gas (from contract):", gasUsed.toString());
   console.log("   → Total members:", results.length);
@@ -154,7 +155,7 @@ async function main() {
   const breakdowns = [];
   for (let i = 0; i < results.length; i++) {
     try {
-      const breakdown = await pgWeights.getMemberBreakdown(results[i].memberAddress, cutoffYear, cutoffMonth);
+      const breakdown = await registry.getMemberBreakdown(results[i].memberAddress, cutoffYear, cutoffMonth);
       breakdowns.push({
         address: results[i].memberAddress,
         monthsSinceJoin: breakdown[0],
